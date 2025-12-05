@@ -11,6 +11,8 @@ import resetRoutes from "./routes/reset.js";
 import paymentSummaryRoutes from "./routes/paymentSummary.js";
 import fs from "fs";
 
+import { pool } from "./db/db.js";
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
@@ -40,6 +42,15 @@ app.get("/", (req, res) => {
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: "Something went wrong!" });
+});
+
+app.get("test-db", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT NOW()");
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Sync database and load defaults
