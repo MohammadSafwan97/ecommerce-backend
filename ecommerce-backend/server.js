@@ -45,15 +45,16 @@ app.use(express.static(path.join(__dirname, "dist")));
 app.get("/", (req, res) => {
   res.send("hello world");
 });
+
 // Catch-all route to serve index.html for any unmatched routes
-app.get("*", (req, res) => {
-  const indexPath = path.join(__dirname, "dist", "index.html");
-  if (fs.existsSync(indexPath)) {
-    res.sendFile(indexPath);
-  } else {
-    res.status(404).send("index.html not found");
-  }
-});
+// app.get("*", (req, res) => {
+//   const indexPath = path.join(__dirname, "dist", "index.html");
+//   if (fs.existsSync(indexPath)) {
+//     res.sendFile(indexPath);
+//   } else {
+//     res.status(404).send("index.html not found");
+//   }
+// });
 
 // Error handling middleware
 /* eslint-disable no-unused-vars */
