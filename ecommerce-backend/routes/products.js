@@ -4,6 +4,14 @@ const router = express.Router();
 
 router.get("/", async (req, res) => {
   try {
+    const category = req.query.category;
+    if (category) {
+      const { rows } = await pool.query(
+        "SELECT * FROM products WHERE category=$1",
+        [category]
+      );
+      return res.json(rows);
+    }
     const { rows } = await pool.query(
       "SELECT * FROM products ORDER BY id DESC;"
     );
