@@ -14,8 +14,6 @@ import resetRoutes from "./routes/reset.js";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-import cors from "cors";
-
 const allowedOrigins = [
   "http://localhost:5173",
   "https://fullstack-react-ecommerce-y14j.vercel.app",
