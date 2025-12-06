@@ -1,10 +1,15 @@
 import pkg from "pg";
 import dotenv from "dotenv";
-dotenv.config();
+
+dotenv.config(); // make sure this is CALLING the function
 
 const { Pool } = pkg;
 
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
+const pool = new Pool({
+  connectionString: process.env.SUPABASE_DB_URL,
+  ssl: {
+    rejectUnauthorized: false, // required for Supabase
+  },
 });
+
+export default pool;
