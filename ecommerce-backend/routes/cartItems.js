@@ -7,6 +7,10 @@ const router = express.Router();
  * body: { user_id, product_id, quantity }
  * creates cart for user if not exists, adds/increments item
  */
+
+router.get("/", (req, res) => {
+  res.send("carts");
+});
 router.post("/add", async (req, res) => {
   try {
     const { user_id, product_id, quantity = 1 } = req.body;
