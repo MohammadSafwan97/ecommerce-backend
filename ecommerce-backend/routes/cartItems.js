@@ -1,88 +1,76 @@
-import express from 'express';
-import { CartItem } from '../models/CartItem.js';
-import { Product } from '../models/Product.js';
-import { DeliveryOption } from '../models/DeliveryOption.js';
-
+import express from "express";
+import pool from "../db.js";
 const router = express.Router();
 
-router.get('/', async (req, res) => {
-  const expand = req.query.expand;
-  let cartItems = await CartItem.findAll();
+/**
+ * POST /cart/add
+ * body: { user_id, product_id, quantity }
+ * creates cart for user if not exists, adds/increments item
+ */
+router.post("/add", async (req, res) => {
+  try {
+    const { user_id, product_id, quantity = 1 } = req.body;
+    if (!user_id || !product_id)
+      return res.status(400).json({ error: "user_id and product_id required" });
 
-  if (expand === 'product') {
-    cartItems = await Promise.all(cartItems.map(async (item) => {
-      const product = await Product.findByPk(item.productId);
-      return {
-        ...item.toJSON(),
-        product
-      };
-    }));
-  }
-
-  res.json(cartItems);
-});
-
-router.post('/', async (req, res) => {
-  const { productId, quantity } = req.body;
-
-  const product = await Product.findByPk(productId);
-  if (!product) {
-    return res.status(400).json({ error: 'Product not found' });
-  }
-
-  if (typeof quantity !== 'number' || quantity < 1 || quantity > 10) {
-    return res.status(400).json({ error: 'Quantity must be a number between 1 and 10' });
-  }
-
-  let cartItem = await CartItem.findOne({ where: { productId } });
-  if (cartItem) {
-    cartItem.quantity += quantity;
-    await cartItem.save();
-  } else {
-    cartItem = await CartItem.create({ productId, quantity, deliveryOptionId: "1" });
-  }
-
-  res.status(201).json(cartItem);
-});
-
-router.put('/:productId', async (req, res) => {
-  const { productId } = req.params;
-  const { quantity, deliveryOptionId } = req.body;
-
-  const cartItem = await CartItem.findOne({ where: { productId } });
-  if (!cartItem) {
-    return res.status(404).json({ error: 'Cart item not found' });
-  }
-
-  if (quantity !== undefined) {
-    if (typeof quantity !== 'number' || quantity < 1) {
-      return res.status(400).json({ error: 'Quantity must be a number greater than 0' });
+    // ensure cart exists
+    const cartRes = await pool.query(
+      "SELECT id FROM carts WHERE user_id = $1;",
+      [user_id]
+    );
+    let cartId;
+    if (cartRes.rows.length === 0) {
+      const insert = await pool.query(
+        "INSERT INTO carts (user_id) VALUES ($1) RETURNING id;",
+        [user_id]
+      );
+      cartId = insert.rows[0].id;
+    } else {
+      cartId = cartRes.rows[0].id;
     }
-    cartItem.quantity = quantity;
-  }
 
-  if (deliveryOptionId !== undefined) {
-    const deliveryOption = await DeliveryOption.findByPk(deliveryOptionId);
-    if (!deliveryOption) {
-      return res.status(400).json({ error: 'Invalid delivery option' });
-    }
-    cartItem.deliveryOptionId = deliveryOptionId;
-  }
+    // upsert cart item
+    await pool.query(
+      `
+      INSERT INTO cart_items (cart_id, product_id, quantity)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (cart_id, product_id)
+      DO UPDATE SET quantity = cart_items.quantity + EXCLUDED.quantity;
+    `,
+      [cartId, product_id, quantity]
+    );
 
-  await cartItem.save();
-  res.json(cartItem);
+    res.json({ ok: true, cart_id: cartId });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "DB error" });
+  }
 });
 
-router.delete('/:productId', async (req, res) => {
-  const { productId } = req.params;
+// GET /cart/:user_id
+router.get("/:user_id", async (req, res) => {
+  try {
+    const user_id = parseInt(req.params.user_id, 10);
+    const cartRes = await pool.query(
+      "SELECT id FROM carts WHERE user_id = $1;",
+      [user_id]
+    );
+    if (cartRes.rows.length === 0) return res.json({ items: [] });
 
-  const cartItem = await CartItem.findOne({ where: { productId } });
-  if (!cartItem) {
-    return res.status(404).json({ error: 'Cart item not found' });
+    const cartId = cartRes.rows[0].id;
+    const { rows } = await pool.query(
+      `SELECT ci.id, ci.quantity, p.id as product_id, p.name, p.price_cents, p.image
+       FROM cart_items ci
+       JOIN products p ON p.id = ci.product_id
+       WHERE ci.cart_id = $1;`,
+      [cartId]
+    );
+
+    res.json({ items: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "DB error" });
   }
-
-  await cartItem.destroy();
-  res.status(204).send();
 });
 
 export default router;

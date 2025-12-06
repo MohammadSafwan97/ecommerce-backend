@@ -1,99 +1,111 @@
-import express from 'express';
-import { Order } from '../models/Order.js';
-import { Product } from '../models/Product.js';
-import { DeliveryOption } from '../models/DeliveryOption.js';
-import { CartItem } from '../models/CartItem.js';
-
+import express from "express";
+import pool from "../db.js";
 const router = express.Router();
 
-router.get('/', async (req, res) => {
-  const expand = req.query.expand;
-  let orders = await Order.unscoped().findAll({ order: [['orderTimeMs', 'DESC']] }); // Sort by most recent
+/**
+ * POST /orders/create
+ * body: { user_id, delivery_option_id }
+ * creates an order from the user's cart
+ */
+router.post("/create", async (req, res) => {
+  const { user_id, delivery_option_id } = req.body;
+  if (!user_id) return res.status(400).json({ error: "user_id required" });
 
-  if (expand === 'products') {
-    orders = await Promise.all(orders.map(async (order) => {
-      const products = await Promise.all(order.products.map(async (product) => {
-        const productDetails = await Product.findByPk(product.productId);
-        return {
-          ...product,
-          product: productDetails
-        };
-      }));
-      return {
-        ...order.toJSON(),
-        products
-      };
-    }));
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // get cart
+    const cartRes = await client.query(
+      "SELECT id FROM carts WHERE user_id = $1;",
+      [user_id]
+    );
+    if (cartRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Cart empty" });
+    }
+    const cartId = cartRes.rows[0].id;
+
+    const itemsRes = await client.query(
+      `SELECT ci.quantity, p.id as product_id, p.price_cents
+       FROM cart_items ci JOIN products p ON p.id = ci.product_id
+       WHERE ci.cart_id = $1;`,
+      [cartId]
+    );
+
+    if (itemsRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Cart empty" });
+    }
+
+    // compute total
+    let total = 0;
+    for (const it of itemsRes.rows) total += it.quantity * it.price_cents;
+
+    // delivery cost
+    let deliveryCost = 0;
+    if (delivery_option_id) {
+      const d = await client.query(
+        "SELECT price_cents FROM delivery_options WHERE id = $1;",
+        [delivery_option_id]
+      );
+      if (d.rows.length > 0) deliveryCost = d.rows[0].price_cents;
+    }
+
+    const totalWithDelivery = total + deliveryCost;
+
+    // create order
+    const orderInsert = await client.query(
+      `INSERT INTO orders (user_id, total_cents, delivery_option_id) VALUES ($1, $2, $3) RETURNING id;`,
+      [user_id, totalWithDelivery, delivery_option_id]
+    );
+    const orderId = orderInsert.rows[0].id;
+
+    // insert order items
+    for (const it of itemsRes.rows) {
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, unit_price_cents)
+         VALUES ($1, $2, $3, $4);`,
+        [orderId, it.product_id, it.quantity, it.price_cents]
+      );
+    }
+
+    // clear cart
+    await client.query("DELETE FROM cart_items WHERE cart_id = $1;", [cartId]);
+
+    await client.query("COMMIT");
+    res.json({ ok: true, order_id: orderId, total_cents: totalWithDelivery });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error(err);
+    res.status(500).json({ error: "Order creation failed" });
+  } finally {
+    client.release();
   }
-
-  res.json(orders);
 });
 
-router.post('/', async (req, res) => {
-  const cartItems = await CartItem.findAll();
+// GET /orders/:orderId
+router.get("/:orderId", async (req, res) => {
+  const orderId = parseInt(req.params.orderId, 10);
+  try {
+    const { rows } = await pool.query("SELECT * FROM orders WHERE id = $1;", [
+      orderId,
+    ]);
+    if (rows.length === 0)
+      return res.status(404).json({ error: "Order not found" });
 
-  if (cartItems.length === 0) {
-    return res.status(400).json({ error: 'Cart is empty' });
+    const items = await pool.query(
+      `SELECT oi.*, p.name, p.image
+       FROM order_items oi JOIN products p ON p.id = oi.product_id
+       WHERE oi.order_id = $1;`,
+      [orderId]
+    );
+
+    res.json({ order: rows[0], items: items.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "DB error" });
   }
-
-  let totalCostCents = 0;
-  const products = await Promise.all(cartItems.map(async (item) => {
-    const product = await Product.findByPk(item.productId);
-    if (!product) {
-      throw new Error(`Product not found: ${item.productId}`);
-    }
-    const deliveryOption = await DeliveryOption.findByPk(item.deliveryOptionId);
-    if (!deliveryOption) {
-      throw new Error(`Invalid delivery option: ${item.deliveryOptionId}`);
-    }
-    const productCost = product.priceCents * item.quantity;
-    const shippingCost = deliveryOption.priceCents;
-    totalCostCents += productCost + shippingCost;
-    const estimatedDeliveryTimeMs = Date.now() + deliveryOption.deliveryDays * 24 * 60 * 60 * 1000;
-    return {
-      productId: item.productId,
-      quantity: item.quantity,
-      estimatedDeliveryTimeMs
-    };
-  }));
-
-  totalCostCents = Math.round(totalCostCents * 1.1);
-
-  const order = await Order.create({
-    orderTimeMs: Date.now(),
-    totalCostCents,
-    products
-  });
-
-  await CartItem.destroy({ where: {} });
-
-  res.status(201).json(order);
-});
-
-router.get('/:orderId', async (req, res) => {
-  const { orderId } = req.params;
-  const expand = req.query.expand;
-
-  let order = await Order.findByPk(orderId);
-  if (!order) {
-    return res.status(404).json({ error: 'Order not found' });
-  }
-
-  if (expand === 'products') {
-    const products = await Promise.all(order.products.map(async (product) => {
-      const productDetails = await Product.findByPk(product.productId);
-      return {
-        ...product,
-        product: productDetails
-      };
-    }));
-    order = {
-      ...order.toJSON(),
-      products
-    };
-  }
-
-  res.json(order);
 });
 
 export default router;
