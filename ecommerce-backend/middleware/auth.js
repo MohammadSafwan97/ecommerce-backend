@@ -14,12 +14,10 @@ export default function auth(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
 
-    // 🚀 VERY IMPORTANT — this is your user_id
-    req.user = { id: decoded.sub };
+    req.user = { id: decoded.sub }; // ALWAYS PUT USER ID HERE
 
     next();
   } catch (error) {
-    console.error("JWT error:", error);
     return res.status(401).json({ error: "Invalid or expired token" });
   }
 }

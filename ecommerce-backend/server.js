@@ -6,8 +6,9 @@ dotenv.config();
 
 import productRoutes from "./routes/products.js";
 import auth from "./routes/auth.js";
+import cartRoutes from "./routes/cart.js";
 import deliveryRoutes from "./routes/deliveryOptions.js";
-import cartRoutes from "./routes/cartItems.js";
+
 import orderRoutes from "./routes/orders.js";
 import paymentRoutes from "./routes/paymentSummary.js";
 import resetRoutes from "./routes/reset.js";
