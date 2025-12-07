@@ -21,12 +21,13 @@ const allowedOrigins = [
   "https://fullstack-react-ecommerce-y14j.vercel.app",
 ];
 
-app.use(
-  cors({
-    origin: allowedOrigins,
-    credentials: true,
-  })
-);
+cors({
+  origin: [
+    "http://localhost:5173",
+    "https://fullstack-react-ecommerce-y14j.vercel.app",
+  ],
+  credentials: true,
+});
 
 app.use(express.json());
 

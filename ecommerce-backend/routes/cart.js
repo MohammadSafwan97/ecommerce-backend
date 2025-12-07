@@ -32,7 +32,6 @@ router.post("/add", async (req, res) => {
   }
 });
 
-// GET CART
 router.get("/:user_id", async (req, res) => {
   try {
     const user_id = req.params.user_id;
