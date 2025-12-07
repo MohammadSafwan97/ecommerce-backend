@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import productRoutes from "./routes/products.js";
+import auth from "./routes/auth.js";
 import deliveryRoutes from "./routes/deliveryOptions.js";
 import cartRoutes from "./routes/cartItems.js";
 import orderRoutes from "./routes/orders.js";
@@ -38,6 +39,7 @@ app.use("/cart", cartRoutes);
 app.use("/orders", orderRoutes);
 app.use("/payment-summary", paymentRoutes);
 app.use("/reset", resetRoutes);
+app.use("/auth", auth);
 
 // error handler
 app.use((err, req, res, next) => {
