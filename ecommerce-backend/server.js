@@ -15,12 +15,7 @@ import resetRoutes from "./routes/reset.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://fullstack-react-ecommerce-y14j.vercel.app",
-];
-
+app.use(express.json());
 cors({
   origin: [
     "http://localhost:5173",
@@ -28,8 +23,6 @@ cors({
   ],
   credentials: true,
 });
-
-app.use(express.json());
 
 // health
 app.get("/", (req, res) => res.send("Backend is running"));
