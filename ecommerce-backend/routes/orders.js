@@ -1,238 +1,99 @@
-import express from "express";
-import pool from "../db.js";
+import express from 'express';
+import { Order } from '../models/Order.js';
+import { Product } from '../models/Product.js';
+import { DeliveryOption } from '../models/DeliveryOption.js';
+import { CartItem } from '../models/CartItem.js';
 
 const router = express.Router();
 
-/* ---------------------------------------------------------
-   GET /orders?user_id=1&expand=products
-   Returns ALL orders for one user (order history)
---------------------------------------------------------- */
-router.get("/", async (req, res) => {
-  const { user_id, expand } = req.query;
+router.get('/', async (req, res) => {
+  const expand = req.query.expand;
+  let orders = await Order.unscoped().findAll({ order: [['orderTimeMs', 'DESC']] }); // Sort by most recent
 
-  if (!user_id) {
-    return res.status(400).json({ error: "user_id is required" });
+  if (expand === 'products') {
+    orders = await Promise.all(orders.map(async (order) => {
+      const products = await Promise.all(order.products.map(async (product) => {
+        const productDetails = await Product.findByPk(product.productId);
+        return {
+          ...product,
+          product: productDetails
+        };
+      }));
+      return {
+        ...order.toJSON(),
+        products
+      };
+    }));
   }
 
-  try {
-    // Fetch all orders for user
-    const ordersRes = await pool.query(
-      `
-      SELECT *
-      FROM orders
-      WHERE user_id = $1
-      ORDER BY created_at DESC;
-      `,
-      [user_id]
-    );
-
-    const orders = ordersRes.rows;
-
-    // If frontend did NOT request expanded product info → return basic orders
-    if (expand !== "products") {
-      return res.json(orders);
-    }
-
-    // Expand products for each order
-    for (const order of orders) {
-      const itemsRes = await pool.query(
-        `
-        SELECT 
-          oi.quantity,
-          oi.unit_price_cents,
-          oi.created_at,
-          o.estimated_delivery_time_ms,
-          
-          json_build_object(
-            'id', p.id,
-            'name', p.name,
-            'image', p.image
-          ) AS product
-        FROM order_items oi
-        JOIN products p ON p.id = oi.product_id
-        JOIN orders o ON o.id = oi.order_id
-        WHERE oi.order_id = $1;
-        `,
-        [order.id]
-      );
-
-      // Normalized field names for frontend
-      order.products = itemsRes.rows;
-      order.orderTimeMs = Number(order.order_time_ms || 0);
-    }
-
-    res.json(orders);
-  } catch (err) {
-    console.error("Error fetching orders:", err);
-    res.status(500).json({ error: "DB error" });
-  }
+  res.json(orders);
 });
 
-/* ---------------------------------------------------------
-   POST /orders/create
-   Creates an order from a user's cart
---------------------------------------------------------- */
-router.post("/create", async (req, res) => {
-  const { user_id, delivery_option_id } = req.body;
+router.post('/', async (req, res) => {
+  const cartItems = await CartItem.findAll();
 
-  if (!user_id) {
-    return res.status(400).json({ error: "user_id is required" });
+  if (cartItems.length === 0) {
+    return res.status(400).json({ error: 'Cart is empty' });
   }
 
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    /* 1. Ensure user has a cart */
-    const cartRes = await client.query(
-      "SELECT id FROM carts WHERE user_id = $1;",
-      [user_id]
-    );
-
-    if (cartRes.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Cart is empty" });
+  let totalCostCents = 0;
+  const products = await Promise.all(cartItems.map(async (item) => {
+    const product = await Product.findByPk(item.productId);
+    if (!product) {
+      throw new Error(`Product not found: ${item.productId}`);
     }
-
-    const cartId = cartRes.rows[0].id;
-
-    /* 2. Fetch cart items */
-    const itemsRes = await client.query(
-      `
-      SELECT ci.quantity, p.id AS product_id, p.price_cents
-      FROM cart_items ci
-      JOIN products p ON p.id = ci.product_id
-      WHERE ci.cart_id = $1;
-      `,
-      [cartId]
-    );
-
-    if (itemsRes.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Cart is empty" });
+    const deliveryOption = await DeliveryOption.findByPk(item.deliveryOptionId);
+    if (!deliveryOption) {
+      throw new Error(`Invalid delivery option: ${item.deliveryOptionId}`);
     }
+    const productCost = product.priceCents * item.quantity;
+    const shippingCost = deliveryOption.priceCents;
+    totalCostCents += productCost + shippingCost;
+    const estimatedDeliveryTimeMs = Date.now() + deliveryOption.deliveryDays * 24 * 60 * 60 * 1000;
+    return {
+      productId: item.productId,
+      quantity: item.quantity,
+      estimatedDeliveryTimeMs
+    };
+  }));
 
-    /* 3. Calculate total */
-    let total = 0;
-    for (const item of itemsRes.rows) {
-      total += item.quantity * item.price_cents;
-    }
+  totalCostCents = Math.round(totalCostCents * 1.1);
 
-    /* 4. Delivery cost */
-    let deliveryCost = 0;
+  const order = await Order.create({
+    orderTimeMs: Date.now(),
+    totalCostCents,
+    products
+  });
 
-    if (delivery_option_id) {
-      const dRes = await client.query(
-        "SELECT price_cents FROM delivery_options WHERE id = $1;",
-        [delivery_option_id]
-      );
+  await CartItem.destroy({ where: {} });
 
-      if (dRes.rows.length > 0) {
-        deliveryCost = dRes.rows[0].price_cents;
-      }
-    }
-
-    const finalTotal = total + deliveryCost;
-
-    /* 5. Create timestamps */
-    const nowMs = Date.now();
-    const etaMs = nowMs + 3 * 24 * 60 * 60 * 1000; // +3 days
-
-    /* 6. Create order */
-    const orderRes = await client.query(
-      `
-      INSERT INTO orders (
-        user_id,
-        total_cents,
-        delivery_option_id,
-        order_time_ms,
-        estimated_delivery_time_ms
-      )
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id;
-      `,
-      [user_id, finalTotal, delivery_option_id, nowMs, etaMs]
-    );
-
-    const orderId = orderRes.rows[0].id;
-
-    /* 7. Insert order items */
-    for (const item of itemsRes.rows) {
-      await client.query(
-        `
-        INSERT INTO order_items (
-          order_id, product_id, quantity, unit_price_cents
-        )
-        VALUES ($1, $2, $3, $4);
-        `,
-        [orderId, item.product_id, item.quantity, item.price_cents]
-      );
-    }
-
-    /* 8. Clear the cart */
-    await client.query("DELETE FROM cart_items WHERE cart_id = $1;", [cartId]);
-
-    await client.query("COMMIT");
-
-    res.json({
-      ok: true,
-      order_id: orderId,
-      total_cents: finalTotal,
-    });
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("Order creation failed:", err);
-    res.status(500).json({ error: "Order creation failed" });
-  } finally {
-    client.release();
-  }
+  res.status(201).json(order);
 });
 
-/* ---------------------------------------------------------
-   GET /orders/:id   → Single order details
---------------------------------------------------------- */
-router.get("/:orderId", async (req, res) => {
-  const orderId = Number(req.params.orderId);
+router.get('/:orderId', async (req, res) => {
+  const { orderId } = req.params;
+  const expand = req.query.expand;
 
-  try {
-    /* Get order main info */
-    const orderRes = await pool.query("SELECT * FROM orders WHERE id = $1;", [
-      orderId,
-    ]);
-
-    if (orderRes.rows.length === 0) {
-      return res.status(404).json({ error: "Order not found" });
-    }
-
-    const order = orderRes.rows[0];
-
-    /* Get items for the order */
-    const itemsRes = await pool.query(
-      `
-      SELECT 
-        oi.quantity,
-        oi.unit_price_cents,
-        json_build_object(
-          'id', p.id,
-          'name', p.name,
-          'image', p.image
-        ) AS product
-      FROM order_items oi
-      JOIN products p ON p.id = oi.product_id
-      WHERE oi.order_id = $1;
-      `,
-      [orderId]
-    );
-
-    order.products = itemsRes.rows;
-    order.orderTimeMs = Number(order.order_time_ms || 0);
-
-    res.json(order);
-  } catch (err) {
-    console.error("Fetch single order failed:", err);
-    res.status(500).json({ error: "DB error" });
+  let order = await Order.findByPk(orderId);
+  if (!order) {
+    return res.status(404).json({ error: 'Order not found' });
   }
+
+  if (expand === 'products') {
+    const products = await Promise.all(order.products.map(async (product) => {
+      const productDetails = await Product.findByPk(product.productId);
+      return {
+        ...product,
+        product: productDetails
+      };
+    }));
+    order = {
+      ...order.toJSON(),
+      products
+    };
+  }
+
+  res.json(order);
 });
 
 export default router;

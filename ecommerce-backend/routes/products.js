@@ -1,83 +1,31 @@
-import express from "express";
-import pool from "../db.js";
+import express from 'express';
+import { Product } from '../models/Product.js';
 
 const router = express.Router();
 
-// 🟢 In-memory cache
-let cacheAllProducts = null;
-let cacheCategoryProducts = {};
-let cacheTimeAll = 0;
-let cacheTimeCategory = {};
+router.get('/', async (req, res) => {
+  const search = req.query.search;
 
-const CACHE_DURATION = 60 * 1000; // 60 seconds
+  let products;
+  if (search) {
+    products = await Product.findAll();
 
-// GET /products
-router.get("/", async (req, res) => {
-  try {
-    const category = req.query.category;
-    const now = Date.now();
+    // Filter products by case-insensitive search on name or keywords
+    const lowerCaseSearch = search.toLowerCase();
 
-    // 🟢 CATEGORY FILTERING WITH CACHE
-    if (category) {
-      // If category cached and still fresh → return cached
-      if (
-        cacheCategoryProducts[category] &&
-        now - cacheTimeCategory[category] < CACHE_DURATION
-      ) {
-        return res.json(cacheCategoryProducts[category]);
-      }
+    products = products.filter(product => {
+      const nameMatch = product.name.toLowerCase().includes(lowerCaseSearch);
 
-      // Otherwise fetch from DB
-      const { rows } = await pool.query(
-        "SELECT * FROM products WHERE category=$1",
-        [category]
-      );
+      const keywordsMatch = product.keywords.some(keyword => keyword.toLowerCase().includes(lowerCaseSearch));
 
-      // Store in cache
-      cacheCategoryProducts[category] = rows;
-      cacheTimeCategory[category] = now;
+      return nameMatch || keywordsMatch;
+    });
 
-      return res.json(rows);
-    }
-
-    // 🟢 ALL PRODUCTS CACHE
-    if (cacheAllProducts && now - cacheTimeAll < CACHE_DURATION) {
-      return res.json(cacheAllProducts);
-    }
-
-    // Fetch from DB
-    const { rows } = await pool.query(
-      "SELECT * FROM products ORDER BY id DESC;"
-    );
-
-    // Save cache
-    cacheAllProducts = rows;
-    cacheTimeAll = now;
-
-    res.json(rows);
-  } catch (err) {
-    console.error("Product fetch error:", err);
-    res.status(500).json({ error: "DB error" });
+  } else {
+    products = await Product.findAll();
   }
-});
 
-// GET /products/:id
-router.get("/:id", async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-
-    const { rows } = await pool.query("SELECT * FROM products WHERE id = $1;", [
-      id,
-    ]);
-
-    if (rows.length === 0)
-      return res.status(404).json({ error: "Product not found" });
-
-    res.json(rows[0]);
-  } catch (err) {
-    console.error("Product detail fetch error:", err);
-    res.status(500).json({ error: "DB error" });
-  }
+  res.json(products);
 });
 
 export default router;

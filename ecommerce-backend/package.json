@@ -15,16 +15,14 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@supabase/supabase-js": "^2.86.2",
+    "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",
-    "mongodb": "^7.0.0",
-    "mongoose": "^9.0.0",
     "mysql2": "^3.14.1",
     "patch-package": "8.0.0",
-    "pg": "^8.16.3",
+    "pg": "^8.16.0",
     "sequelize": "^6.6.5",
     "sql.js": "1.10.3",
     "sql.js-as-sqlite3": "0.2.1"
